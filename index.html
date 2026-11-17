@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mapa de Entregas - Escuelas</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
+<style>
+body{margin:0;font:14px system-ui,sans-serif;display:flex;height:100vh}
+#side{width:420px;display:flex;flex-direction:column;border-right:1px solid #ccc;min-width:0}
+#top{padding:10px;border-bottom:1px solid #ddd}
+#top input,#top select{margin:2px 0;padding:4px;width:100%;box-sizing:border-box}
+#sum{display:flex;gap:6px;margin:6px 0}#sum span{flex:1;padding:4px;border-radius:4px;color:#fff;text-align:center;font-size:12px}
+#list{overflow:auto;flex:1}.it{padding:6px 10px;border-bottom:1px solid #eee;display:flex;gap:6px;align-items:center;cursor:pointer}
+.it b{flex:1}.it small{color:#666;display:block;font-weight:normal}.it select{width:105px}
+#map{flex:1}#msg{padding:6px 10px;font-size:12px;background:#fff3cd}#msg.err{background:#f8d7da}
+button{padding:4px 8px;margin-right:4px}#who{font-size:12px;color:#555;float:right}
+.apx{opacity:.8;border-style:dashed!important}
+@media(max-width:800px){body{flex-direction:column}#side{width:100%;height:50vh}}
+</style></head><body>
+<div id="side">
+ <div id="top"><b>Mapa de Entregas</b><span id="who"></span>
+  <div id="sum"></div>
+  <input id="q" placeholder="Buscar escuela / código / ORD">
+  <select id="rf"><option value="">Todas las regiones</option></select>
+  <select id="sf"><option value="">Todos los estados</option><option>Pendiente</option><option>En Ruta</option><option>Entregado</option></select>
+  <div style="margin-top:4px"><button id="sat">Satélite</button><button id="ex">Exportar</button><button id="rl">Actualizar</button><button id="out">Salir</button></div>
+ </div>
+ <div id="msg">Conectando con SharePoint…</div>
+ <div id="list"></div>
+</div>
+<div id="map"></div>
+<script>
+const CFG={
+ clientId:'9869e83c-a139-48a6-aeda-9fa124a20c2c',
+ tenant:'c4663ab0-3fa0-4384-8383-a4b3c6282719',
+ siteId:'computernetworksystemscorp.sharepoint.com,530e2ef8-df14-48de-a0fd-94bf546e87fe,2cc5f422-1fce-4e71-bdc4-2f2ca7e1591d',
+ list:'Escuelas', scopes:['Sites.ReadWrite.All'], refreshMs:30000
+};
+const COL={Pendiente:'#d9534f','En Ruta':'#f0ad4e',Entregado:'#5cb85c'}, ESTADOS=Object.keys(COL);
+const $=id=>document.getElementById(id);
+const msal0=new msal.PublicClientApplication({auth:{clientId:CFG.clientId,authority:'https://login.microsoftonline.com/'+CFG.tenant,redirectUri:(location.hostname==='localhost'?location.origin:location.origin+location.pathname.replace(/[^\/]*$/,''))},cache:{cacheLocation:'sessionStorage'}});
+let DATA=[],markers=[],sig='';
+
+function note(t,err){$('msg').textContent=t;$('msg').className=err?'err':'';}
+async function token(){
+ const account=msal0.getAllAccounts()[0];
+ try{return (await msal0.acquireTokenSilent({scopes:CFG.scopes,account})).accessToken}
+ catch(e){await msal0.acquireTokenRedirect({scopes:CFG.scopes});return new Promise(()=>{});}
+}
+async function g(path,opt={}){
+ const t=await token();
+ const r=await fetch('https://graph.microsoft.com/v1.0'+path,{...opt,headers:{Authorization:'Bearer '+t,'Content-Type':'application/json'}});
+ if(!r.ok)throw new Error(r.status+' '+(await r.text()).slice(0,200));
+ return r.status===204?null:r.json();
+}
+async function load(){
+ try{
+  let url=`/sites/${CFG.siteId}/lists/${CFG.list}/items?$expand=fields&$top=500`,all=[];
+  while(url){const j=await g(url);all.push(...j.value);url=j['@odata.nextLink']?j['@odata.nextLink'].replace('https://graph.microsoft.com/v1.0',''):null;}
+  DATA=all.map(i=>({id:i.id,school:i.fields.Title,code:i.fields.field_1,ord:i.fields.field_2,region:i.fields.field_3,qty:i.fields.field_4,
+   lat:i.fields.field_5,lng:i.fields.field_6,prec:i.fields.field_7,addr:i.fields.field_8,estado:i.fields.field_9||'Pendiente'}));
+  const s=DATA.map(d=>d.id+d.estado).join('|');
+  if(s!==sig){sig=s;render();}
+  note('Conectado · '+DATA.length+' escuelas · actualizado '+new Date().toLocaleTimeString());
+ }catch(e){note('Error: '+e.message,true);}
+}
+async function setEstado(d,v,reload){
+ const old=d.estado;d.estado=v;sig=DATA.map(x=>x.id+x.estado).join('|');render();
+ try{await g(`/sites/${CFG.siteId}/lists/${CFG.list}/items/${d.id}/fields`,{method:'PATCH',body:JSON.stringify({field_9:v})});note('Guardado: '+d.school+' → '+v);}
+ catch(e){d.estado=old;sig='';render();note('No se pudo guardar: '+e.message,true);}
+}
+function sel(d){
+ const s=document.createElement('select');
+ ESTADOS.forEach(v=>{const o=new Option(v,v);if(d.estado===v)o.selected=true;s.add(o)});
+ s.onchange=()=>setEstado(d,s.value);s.onclick=e=>e.stopPropagation();return s;
+}
+const map=new maplibregl.Map({container:'map',center:[-66.4,18.2],zoom:8,style:'https://tiles.openfreemap.org/styles/liberty'});
+map.addControl(new maplibregl.NavigationControl());
+map.on('load',()=>{map.addSource('sat',{type:'raster',tileSize:256,maxzoom:19,attribution:'Imagery © Esri, Maxar, Earthstar Geographics',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}']});map.addLayer({id:'sat',type:'raster',source:'sat',layout:{visibility:'none'}})});
+$('sat').onclick=e=>{const on=map.getLayoutProperty('sat','visibility')!=='visible';map.setLayoutProperty('sat','visibility',on?'visible':'none');e.target.textContent=on?'Mapa':'Satélite'};
+
+function render(){
+ const q=$('q').value.toLowerCase(),rg=$('rf').value,st=$('sf').value;
+ [...new Set(DATA.map(d=>d.region))].sort().forEach(r=>{if(![...$('rf').options].some(o=>o.value===r))$('rf').add(new Option(r,r))});
+ const f=DATA.filter(d=>(!rg||d.region===rg)&&(!st||d.estado===st)&&((d.school||'')+d.code+d.ord).toLowerCase().includes(q));
+ $('sum').innerHTML=ESTADOS.map(k=>`<span style="background:${COL[k]}">${k}: ${DATA.filter(d=>d.estado===k).length}</span>`).join('');
+ markers.forEach(m=>m.remove());markers=[];$('list').innerHTML='';
+ f.forEach(d=>{
+  const has=d.lat!=null&&d.lng!=null;
+  if(has){
+   const el=document.createElement('div');el.style.cssText='width:16px;height:16px;border-radius:50%;border:1px solid #333;cursor:pointer;background:'+COL[d.estado];
+   if(d.prec==='town-only')el.classList.add('apx');
+   const p=document.createElement('div');
+   p.innerHTML=`<b>${d.school}</b><br>${d.code} · ${d.ord} · ${d.qty} equipos<br>${d.region}<br>${d.addr||''}<br>`+(d.prec==='town-only'?'<i>Ubicación aproximada</i><br>':'')+
+    `<a target="_blank" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${d.lat},${d.lng}">Ver en Street View</a><br>`;
+   p.appendChild(sel(d));
+   markers.push(new maplibregl.Marker({element:el}).setLngLat([d.lng,d.lat]).setPopup(new maplibregl.Popup({offset:12}).setDOMContent(p)).addTo(map));
+  }
+  const row=document.createElement('div');row.className='it';
+  const b=document.createElement('b');b.innerHTML=`${d.school}<small>${d.code} · ${d.ord} · ${d.qty} equipos · ${d.region}${has?'':' · sin coordenadas'}</small>`;
+  row.appendChild(b);row.appendChild(sel(d));
+  row.onclick=()=>{if(has)map.flyTo({center:[d.lng,d.lat],zoom:15})};
+  $('list').appendChild(row);
+ });
+}
+['q','rf','sf'].forEach(i=>$(i).oninput=render);
+$('rl').onclick=()=>load();
+$('out').onclick=()=>msal0.logoutRedirect({postLogoutRedirectUri:msal0.config.auth.redirectUri});
+$('ex').onclick=()=>{const c='code,school,ord,region,status\n'+DATA.map(d=>[d.code,'"'+d.school+'"',d.ord,d.region,d.estado].join(',')).join('\n');
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([c],{type:'text/csv'}));a.download='estados_entrega.csv';a.click()};
+
+(async()=>{
+ try{
+  await msal0.handleRedirectPromise();
+  const acc=msal0.getAllAccounts()[0];
+  if(!acc){await msal0.loginRedirect({scopes:CFG.scopes});return;}
+  $('who').textContent=acc.username;
+  await load();setInterval(load,CFG.refreshMs);
+ }catch(e){note('Error de inicio de sesión: '+e.message,true);}
+})();
+</script></body></html>
