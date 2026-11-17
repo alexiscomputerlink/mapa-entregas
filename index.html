@@ -23,6 +23,10 @@ button{padding:4px 8px;margin-right:4px}#who{font-size:12px;color:#555;float:rig
 #reg table{width:100%;border-collapse:collapse;margin-top:4px}#reg th,#reg td{padding:2px 4px;text-align:right;border-bottom:1px solid #eee}
 #reg th:first-child,#reg td:first-child{text-align:left}#reg tr.tot td{font-weight:700;border-top:1px solid #999}
 .rt{color:#444;font-size:12px}
+#tfd{margin:2px 0;border:1px solid #767676;border-radius:2px;padding:4px;background:#fff;position:relative;font-size:13px}#tfd summary{cursor:pointer}
+#tfp{position:absolute;left:-1px;right:-1px;top:100%;margin-top:1px;background:#fff;border:1px solid #767676;box-shadow:0 4px 10px rgba(0,0,0,.25);z-index:20;max-height:320px;overflow:auto}
+#tfl label{display:block;padding:5px 10px;cursor:pointer}#top #tfl input{width:auto;margin:0 0 0 8px;padding:0;vertical-align:middle}#tfl label:hover{background:#eee}
+#tfc{margin:6px 10px;padding:2px 8px}
 @media(max-width:800px){#mapwrap{min-height:50vh}.dc{width:88px;padding:4px}.dc svg{width:60px;height:60px}}
 @media(max-width:800px){body{flex-direction:column}#side{width:100%;height:50vh}}
 </style></head><body>
@@ -33,7 +37,7 @@ button{padding:4px 8px;margin-right:4px}#who{font-size:12px;color:#555;float:rig
   <input id="q" placeholder="Buscar escuela / código / ORD / ruta">
   <select id="rf"><option value="">Todas las regiones</option></select>
   <select id="sf"><option value="">Todos los estados</option><option>Pendiente</option><option>En Ruta</option><option>Entregado</option></select>
-  <select id="tf"><option value="">Todas las rutas</option></select>
+  <details id="tfd"><summary id="tfs">Todas las rutas</summary><div id="tfp"><button id="tfc" type="button">Limpiar rutas</button><div id="tfl"></div></div></details>
   <div style="margin-top:4px"><button id="sat">Satélite</button><button id="ex">Exportar</button><button id="rl">Actualizar</button><button id="out">Salir</button></div>
  </div>
  <div id="msg">Conectando con SharePoint…</div>
@@ -50,7 +54,7 @@ const CFG={
 const COL={Pendiente:'#d9534f','En Ruta':'#f0ad4e',Entregado:'#5cb85c'}, ESTADOS=Object.keys(COL);
 const $=id=>document.getElementById(id);
 const msal0=new msal.PublicClientApplication({auth:{clientId:CFG.clientId,authority:'https://login.microsoftonline.com/'+CFG.tenant,redirectUri:(location.hostname==='localhost'?location.origin:location.origin+location.pathname.replace(/[^\/]*$/,''))},cache:{cacheLocation:'sessionStorage'}});
-let DATA=[],markers=[],sig='';
+let DATA=[],markers=[],sig='';const RSEL=new Set();
 
 function note(t,err){$('msg').textContent=t;$('msg').className=err?'err':'';}
 async function token(){
@@ -116,9 +120,11 @@ function render(){
  const q=$('q').value.toLowerCase(),rg=$('rf').value,st=$('sf').value;
  [...new Set(DATA.map(d=>d.region))].sort().forEach(r=>{if(![...$('rf').options].some(o=>o.value===r))$('rf').add(new Option(r,r))});
  dash();
- [...new Set(DATA.map(d=>d.ruta).filter(Boolean))].sort((a,b)=>parseFloat(a)-parseFloat(b)).forEach(r=>{if(![...$('tf').options].some(o=>o.value===r))$('tf').add(new Option('Ruta '+r,r))});
- const rt=$('tf').value;
- const f=DATA.filter(d=>(!rg||d.region===rg)&&(!st||d.estado===st)&&(!rt||d.ruta===rt)&&((d.school||'')+d.code+d.ord+' ruta '+d.ruta).toLowerCase().includes(q));
+ const routes=[...new Set(DATA.map(d=>d.ruta).filter(Boolean))].sort((a,b)=>parseFloat(a)-parseFloat(b));
+ if(routes.join()!==$('tfl').dataset.k){$('tfl').dataset.k=routes.join();
+  $('tfl').innerHTML=routes.map(r=>`<label>Ruta ${esc(r)} <input type="checkbox" value="${esc(r)}"${RSEL.has(r)?' checked':''}></label>`).join('');}
+ $('tfs').textContent=RSEL.size?'Rutas: '+[...RSEL].sort((a,b)=>parseFloat(a)-parseFloat(b)).join(', '):'Todas las rutas';
+ const f=DATA.filter(d=>(!rg||d.region===rg)&&(!st||d.estado===st)&&(!RSEL.size||RSEL.has(d.ruta))&&((d.school||'')+d.code+d.ord+' ruta '+d.ruta).toLowerCase().includes(q));
  $('sum').innerHTML=ESTADOS.map(k=>`<span style="background:${COL[k]}">${k}: ${DATA.filter(d=>d.estado===k).length}</span>`).join('');
  markers.forEach(m=>m.remove());markers=[];$('list').innerHTML='';
  f.forEach(d=>{
@@ -139,7 +145,10 @@ function render(){
   $('list').appendChild(row);
  });
 }
-['q','rf','sf','tf'].forEach(i=>$(i).oninput=render);
+$('tfl').onchange=e=>{const c=e.target;if(c.checked)RSEL.add(c.value);else RSEL.delete(c.value);render();};
+document.addEventListener('click',e=>{if(!$('tfd').contains(e.target))$('tfd').open=false;});
+$('tfc').onclick=()=>{RSEL.clear();$('tfl').dataset.k='';render();};
+['q','rf','sf'].forEach(i=>$(i).oninput=render);
 $('rl').onclick=()=>load();
 $('out').onclick=()=>msal0.logoutRedirect({postLogoutRedirectUri:msal0.config.auth.redirectUri});
 $('ex').onclick=()=>{const c='code,school,ord,region,status\n'+DATA.map(d=>[d.code,'"'+d.school+'"',d.ord,d.region,d.estado].join(',')).join('\n');
