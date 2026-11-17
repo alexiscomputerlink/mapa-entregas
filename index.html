@@ -15,20 +15,31 @@ body{margin:0;font:14px system-ui,sans-serif;display:flex;height:100vh}
 #map{flex:1}#msg{padding:6px 10px;font-size:12px;background:#fff3cd}#msg.err{background:#f8d7da}
 button{padding:4px 8px;margin-right:4px}#who{font-size:12px;color:#555;float:right}
 .apx{opacity:.8;border-style:dashed!important}
+#mapwrap{flex:1;position:relative;min-width:0}#map{position:absolute;inset:0}
+#dash{position:absolute;top:10px;right:10px;z-index:5;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;max-width:calc(100% - 20px);pointer-events:none}
+.dc{pointer-events:auto;background:rgba(255,255,255,.95);border:1px solid #ccc;border-radius:8px;padding:6px 8px;width:112px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.25);cursor:pointer;font-size:11px;line-height:1.35}
+.dc:hover{border-color:#333}.dc b{display:block;font-size:12px}.dc svg{display:block;margin:2px auto}
+#reg{margin:6px 0 0;font-size:12px}#reg summary{cursor:pointer;font-weight:600}
+#reg table{width:100%;border-collapse:collapse;margin-top:4px}#reg th,#reg td{padding:2px 4px;text-align:right;border-bottom:1px solid #eee}
+#reg th:first-child,#reg td:first-child{text-align:left}#reg tr.tot td{font-weight:700;border-top:1px solid #999}
+.rt{color:#444;font-size:12px}
+@media(max-width:800px){#mapwrap{min-height:50vh}.dc{width:88px;padding:4px}.dc svg{width:60px;height:60px}}
 @media(max-width:800px){body{flex-direction:column}#side{width:100%;height:50vh}}
 </style></head><body>
 <div id="side">
  <div id="top"><b>Mapa de Entregas</b><span id="who"></span>
   <div id="sum"></div>
-  <input id="q" placeholder="Buscar escuela / código / ORD">
+  <details id="reg" open><summary>Resumen por región</summary><div id="regtbl"></div></details>
+  <input id="q" placeholder="Buscar escuela / código / ORD / ruta">
   <select id="rf"><option value="">Todas las regiones</option></select>
   <select id="sf"><option value="">Todos los estados</option><option>Pendiente</option><option>En Ruta</option><option>Entregado</option></select>
+  <select id="tf"><option value="">Todas las rutas</option></select>
   <div style="margin-top:4px"><button id="sat">Satélite</button><button id="ex">Exportar</button><button id="rl">Actualizar</button><button id="out">Salir</button></div>
  </div>
  <div id="msg">Conectando con SharePoint…</div>
  <div id="list"></div>
 </div>
-<div id="map"></div>
+<div id="mapwrap"><div id="map"></div><div id="dash"></div></div>
 <script>
 const CFG={
  clientId:'9869e83c-a139-48a6-aeda-9fa124a20c2c',
@@ -58,14 +69,15 @@ async function load(){
   let url=`/sites/${CFG.siteId}/lists/${CFG.list}/items?$expand=fields&$top=500`,all=[];
   while(url){const j=await g(url);all.push(...j.value);url=j['@odata.nextLink']?j['@odata.nextLink'].replace('https://graph.microsoft.com/v1.0',''):null;}
   DATA=all.map(i=>({id:i.id,school:i.fields.Title,code:i.fields.field_1,ord:i.fields.field_2,region:i.fields.field_3,qty:i.fields.field_4,
-   lat:i.fields.field_5,lng:i.fields.field_6,prec:i.fields.field_7,addr:i.fields.field_8,estado:i.fields.field_9||'Pendiente'}));
-  const s=DATA.map(d=>d.id+d.estado).join('|');
+   lat:i.fields.field_5,lng:i.fields.field_6,prec:i.fields.field_7,addr:i.fields.field_8,estado:i.fields.field_9||'Pendiente',
+   ruta:i.fields.Ruta||'',fecha:i.fields.Fecha||''}));
+  const s=DATA.map(d=>d.id+d.estado+d.ruta+d.fecha).join('|');
   if(s!==sig){sig=s;render();}
   note('Conectado · '+DATA.length+' escuelas · actualizado '+new Date().toLocaleTimeString());
  }catch(e){note('Error: '+e.message,true);}
 }
 async function setEstado(d,v,reload){
- const old=d.estado;d.estado=v;sig=DATA.map(x=>x.id+x.estado).join('|');render();
+ const old=d.estado;d.estado=v;sig=DATA.map(x=>x.id+x.estado+x.ruta+x.fecha).join('|');render();
  try{await g(`/sites/${CFG.siteId}/lists/${CFG.list}/items/${d.id}/fields`,{method:'PATCH',body:JSON.stringify({field_9:v})});note('Guardado: '+d.school+' → '+v);}
  catch(e){d.estado=old;sig='';render();note('No se pudo guardar: '+e.message,true);}
 }
@@ -75,14 +87,38 @@ function sel(d){
  s.onchange=()=>setEstado(d,s.value);s.onclick=e=>e.stopPropagation();return s;
 }
 const map=new maplibregl.Map({container:'map',center:[-66.4,18.2],zoom:8,style:'https://tiles.openfreemap.org/styles/liberty'});
-map.addControl(new maplibregl.NavigationControl());
+map.addControl(new maplibregl.NavigationControl(),'bottom-right');
+const MES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+function fmtF(f){if(!f)return '—';const p=String(f).slice(0,10).split('-');return p.length<3?'—':(+p[2])+' '+MES[+p[1]-1]+' '+p[0];}
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function cnt(rows){const e=rows.filter(x=>x.estado==='Entregado').length,r=rows.filter(x=>x.estado==='En Ruta').length,n=rows.length;
+ return{n,e,r,p:n-e-r,pct:n?Math.round(e/n*100):0};}
+function donut(label,key,rows){
+ const c=cnt(rows),R=30,C=2*Math.PI*R;let off=0;
+ const seg=(v,col)=>{const len=c.n?v/c.n*C:0;const s=len?`<circle r="${R}" cx="40" cy="40" fill="none" stroke="${col}" stroke-width="12" stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}" transform="rotate(-90 40 40)"/>`:'';off+=len;return s;};
+ return `<div class="dc" data-r="${esc(key)}" title="Filtrar: ${esc(label)}"><b>${esc(label)}</b>
+  <svg width="80" height="80" viewBox="0 0 80 80"><circle r="${R}" cx="40" cy="40" fill="none" stroke="#e5e5e5" stroke-width="12"/>${seg(c.e,COL.Entregado)}${seg(c.r,COL['En Ruta'])}${seg(c.p,COL.Pendiente)}<text x="40" y="45" text-anchor="middle" font-size="16" font-weight="700">${c.pct}%</text></svg>
+  Total: ${c.n}<br>Entregadas: ${c.e}<br>Pendientes: ${c.p}${c.r?'<br>En ruta: '+c.r:''}</div>`;
+}
+function dash(){
+ const regs=[...new Set(DATA.map(d=>d.region))].sort();
+ $('dash').innerHTML=donut('Total','',DATA)+regs.map(r=>donut(r,r,DATA.filter(d=>d.region===r))).join('');
+ let t='<table><tr><th>Región</th><th>Total</th><th>Pend.</th><th>En ruta</th><th>Entreg.</th><th>%</th></tr>';
+ const row=(l,rows,cls)=>{const c=cnt(rows);return `<tr class="${cls||''}"><td>${esc(l)}</td><td>${c.n}</td><td>${c.p}</td><td>${c.r}</td><td>${c.e}</td><td>${c.pct}%</td></tr>`;};
+ regs.forEach(r=>t+=row(r,DATA.filter(d=>d.region===r)));
+ $('regtbl').innerHTML=t+row('Total',DATA,'tot')+'</table>';
+}
+$('dash').onclick=e=>{const c=e.target.closest('.dc');if(c){$('rf').value=c.dataset.r;render();}};
 map.on('load',()=>{map.addSource('sat',{type:'raster',tileSize:256,maxzoom:19,attribution:'Imagery © Esri, Maxar, Earthstar Geographics',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}']});map.addLayer({id:'sat',type:'raster',source:'sat',layout:{visibility:'none'}})});
 $('sat').onclick=e=>{const on=map.getLayoutProperty('sat','visibility')!=='visible';map.setLayoutProperty('sat','visibility',on?'visible':'none');e.target.textContent=on?'Mapa':'Satélite'};
 
 function render(){
  const q=$('q').value.toLowerCase(),rg=$('rf').value,st=$('sf').value;
  [...new Set(DATA.map(d=>d.region))].sort().forEach(r=>{if(![...$('rf').options].some(o=>o.value===r))$('rf').add(new Option(r,r))});
- const f=DATA.filter(d=>(!rg||d.region===rg)&&(!st||d.estado===st)&&((d.school||'')+d.code+d.ord).toLowerCase().includes(q));
+ dash();
+ [...new Set(DATA.map(d=>d.ruta).filter(Boolean))].sort((a,b)=>parseFloat(a)-parseFloat(b)).forEach(r=>{if(![...$('tf').options].some(o=>o.value===r))$('tf').add(new Option('Ruta '+r,r))});
+ const rt=$('tf').value;
+ const f=DATA.filter(d=>(!rg||d.region===rg)&&(!st||d.estado===st)&&(!rt||d.ruta===rt)&&((d.school||'')+d.code+d.ord+' ruta '+d.ruta).toLowerCase().includes(q));
  $('sum').innerHTML=ESTADOS.map(k=>`<span style="background:${COL[k]}">${k}: ${DATA.filter(d=>d.estado===k).length}</span>`).join('');
  markers.forEach(m=>m.remove());markers=[];$('list').innerHTML='';
  f.forEach(d=>{
@@ -91,19 +127,19 @@ function render(){
    const el=document.createElement('div');el.style.cssText='width:16px;height:16px;border-radius:50%;border:1px solid #333;cursor:pointer;background:'+COL[d.estado];
    if(d.prec==='town-only')el.classList.add('apx');
    const p=document.createElement('div');
-   p.innerHTML=`<b>${d.school}</b><br>${d.code} · ${d.ord} · ${d.qty} equipos<br>${d.region}<br>${d.addr||''}<br>`+(d.prec==='town-only'?'<i>Ubicación aproximada</i><br>':'')+
+   p.innerHTML=`<b>${d.school}</b><br>${d.code} · ${d.ord} · ${d.qty} equipos<br>${d.region}<br><b>Ruta ${d.ruta||'—'}</b> · Entrega: <b>${fmtF(d.fecha)}</b><br>${d.addr||''}<br>`+(d.prec==='town-only'?'<i>Ubicación aproximada</i><br>':'')+
     `<a target="_blank" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${d.lat},${d.lng}">Ver en Street View</a><br>`;
    p.appendChild(sel(d));
    markers.push(new maplibregl.Marker({element:el}).setLngLat([d.lng,d.lat]).setPopup(new maplibregl.Popup({offset:12}).setDOMContent(p)).addTo(map));
   }
   const row=document.createElement('div');row.className='it';
-  const b=document.createElement('b');b.innerHTML=`${d.school}<small>${d.code} · ${d.ord} · ${d.qty} equipos · ${d.region}${has?'':' · sin coordenadas'}</small>`;
+  const b=document.createElement('b');b.innerHTML=`${d.school}<small>${d.code} · ${d.ord} · ${d.qty} equipos · ${d.region}${has?'':' · sin coordenadas'}</small><small class="rt">Ruta ${d.ruta||'—'} · Entrega ${fmtF(d.fecha)}</small>`;
   row.appendChild(b);row.appendChild(sel(d));
   row.onclick=()=>{if(has)map.flyTo({center:[d.lng,d.lat],zoom:15})};
   $('list').appendChild(row);
  });
 }
-['q','rf','sf'].forEach(i=>$(i).oninput=render);
+['q','rf','sf','tf'].forEach(i=>$(i).oninput=render);
 $('rl').onclick=()=>load();
 $('out').onclick=()=>msal0.logoutRedirect({postLogoutRedirectUri:msal0.config.auth.redirectUri});
 $('ex').onclick=()=>{const c='code,school,ord,region,status\n'+DATA.map(d=>[d.code,'"'+d.school+'"',d.ord,d.region,d.estado].join(',')).join('\n');
