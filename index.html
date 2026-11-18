@@ -110,7 +110,7 @@ function compCard(){
  const tot=sum(DATA),del=sum(DATA.filter(d=>d.estado==='Entregado')),rut=sum(DATA.filter(d=>d.estado==='En Ruta')),pen=tot-del-rut;
  const pct=tot?Math.round(del/tot*100):0,R=30,C=2*Math.PI*R;let off=0;
  const seg=(v,col)=>{const len=tot?v/tot*C:0;const s=len?`<circle r="${R}" cx="40" cy="40" fill="none" stroke="${col}" stroke-width="12" stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}" transform="rotate(-90 40 40)"/>`:'';off+=len;return s;};
- return `<div class="dc comp" style="cursor:default"><b>Computadoras entregadas</b>
+ return `<div class="dc comp" style="cursor:default"><b>Entregadas</b>
   <svg width="80" height="80" viewBox="0 0 80 80"><circle r="${R}" cx="40" cy="40" fill="none" stroke="#e5e5e5" stroke-width="12"/>${seg(del,COL.Entregado)}${seg(rut,COL['En Ruta'])}${seg(pen,COL.Pendiente)}<text x="40" y="45" text-anchor="middle" font-size="16" font-weight="700" fill="#2e7d32">${pct}%</text></svg>
   Total de computadoras: ${fmtN(tot)}<br><span style="color:#2e7d32;font-weight:700">Entregadas: ${fmtN(del)}</span><br>Pendientes: ${fmtN(pen)}${rut?'<br>En ruta: '+fmtN(rut):''}</div>`;
 }
