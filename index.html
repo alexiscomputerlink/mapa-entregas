@@ -18,7 +18,7 @@ button{padding:4px 8px;margin-right:4px}#who{font-size:12px;color:#555;float:rig
 #mapwrap{flex:1;position:relative;min-width:0}#map{position:absolute;inset:0}
 #dash{position:absolute;top:10px;right:10px;z-index:5;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;max-width:calc(100% - 20px);pointer-events:none}
 .dc{pointer-events:auto;background:rgba(255,255,255,.95);border:1px solid #ccc;border-radius:8px;padding:6px 8px;width:112px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.25);cursor:pointer;font-size:11px;line-height:1.35}
-.dc:hover{border-color:#333}.dc b{display:block;font-size:12px}.dc svg{display:block;margin:2px auto}
+.dc.comp{width:150px;border-color:#5cb85c;border-width:2px}.dc:hover{border-color:#333}.dc.comp:hover{border-color:#5cb85c}.dc b{display:block;font-size:12px}.dc svg{display:block;margin:2px auto}
 #reg{margin:6px 0 0;font-size:12px}#reg summary{cursor:pointer;font-weight:600}
 #reg table{width:100%;border-collapse:collapse;margin-top:4px}#reg th,#reg td{padding:2px 4px;text-align:right;border-bottom:1px solid #eee}
 #reg th:first-child,#reg td:first-child{text-align:left}#reg tr.tot td{font-weight:700;border-top:1px solid #999}
@@ -104,15 +104,25 @@ function donut(label,key,rows){
   <svg width="80" height="80" viewBox="0 0 80 80"><circle r="${R}" cx="40" cy="40" fill="none" stroke="#e5e5e5" stroke-width="12"/>${seg(c.e,COL.Entregado)}${seg(c.r,COL['En Ruta'])}${seg(c.p,COL.Pendiente)}<text x="40" y="45" text-anchor="middle" font-size="16" font-weight="700">${c.pct}%</text></svg>
   Total: ${c.n}<br>Entregadas: ${c.e}<br>Pendientes: ${c.p}${c.r?'<br>En ruta: '+c.r:''}</div>`;
 }
+const fmtN=n=>Number(n).toLocaleString('en-US');
+function compCard(){
+ const q=d=>Number(d.qty)||0,sum=a=>a.reduce((s,d)=>s+q(d),0);
+ const tot=sum(DATA),del=sum(DATA.filter(d=>d.estado==='Entregado')),rut=sum(DATA.filter(d=>d.estado==='En Ruta')),pen=tot-del-rut;
+ const pct=tot?Math.round(del/tot*100):0,R=30,C=2*Math.PI*R;let off=0;
+ const seg=(v,col)=>{const len=tot?v/tot*C:0;const s=len?`<circle r="${R}" cx="40" cy="40" fill="none" stroke="${col}" stroke-width="12" stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}" transform="rotate(-90 40 40)"/>`:'';off+=len;return s;};
+ return `<div class="dc comp" style="cursor:default"><b>Computadoras entregadas</b>
+  <svg width="80" height="80" viewBox="0 0 80 80"><circle r="${R}" cx="40" cy="40" fill="none" stroke="#e5e5e5" stroke-width="12"/>${seg(del,COL.Entregado)}${seg(rut,COL['En Ruta'])}${seg(pen,COL.Pendiente)}<text x="40" y="45" text-anchor="middle" font-size="16" font-weight="700" fill="#2e7d32">${pct}%</text></svg>
+  Total de computadoras: ${fmtN(tot)}<br><span style="color:#2e7d32;font-weight:700">Entregadas: ${fmtN(del)}</span><br>Pendientes: ${fmtN(pen)}${rut?'<br>En ruta: '+fmtN(rut):''}</div>`;
+}
 function dash(){
  const regs=[...new Set(DATA.map(d=>d.region))].sort();
- $('dash').innerHTML=donut('Total','',DATA)+regs.map(r=>donut(r,r,DATA.filter(d=>d.region===r))).join('');
+ $('dash').innerHTML=donut('Total','',DATA)+compCard()+regs.map(r=>donut(r,r,DATA.filter(d=>d.region===r))).join('');
  let t='<table><tr><th>Región</th><th>Total</th><th>Pend.</th><th>En ruta</th><th>Entreg.</th><th>%</th></tr>';
  const row=(l,rows,cls)=>{const c=cnt(rows);return `<tr class="${cls||''}"><td>${esc(l)}</td><td>${c.n}</td><td>${c.p}</td><td>${c.r}</td><td>${c.e}</td><td>${c.pct}%</td></tr>`;};
  regs.forEach(r=>t+=row(r,DATA.filter(d=>d.region===r)));
  $('regtbl').innerHTML=t+row('Total',DATA,'tot')+'</table>';
 }
-$('dash').onclick=e=>{const c=e.target.closest('.dc');if(c){$('rf').value=c.dataset.r;render();}};
+$('dash').onclick=e=>{const c=e.target.closest('.dc');if(c&&c.dataset.r!==undefined){$('rf').value=c.dataset.r;render();}};
 map.on('load',()=>{map.addSource('sat',{type:'raster',tileSize:256,maxzoom:19,attribution:'Imagery © Esri, Maxar, Earthstar Geographics',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}']});map.addLayer({id:'sat',type:'raster',source:'sat',layout:{visibility:'none'}})});
 $('sat').onclick=e=>{const on=map.getLayoutProperty('sat','visibility')!=='visible';map.setLayoutProperty('sat','visibility',on?'visible':'none');e.target.textContent=on?'Mapa':'Satélite'};
 
